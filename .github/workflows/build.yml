@@ -37,7 +37,7 @@ jobs:
 
       - name: Get makerom + bannertool
         if: steps.tools-cache.outputs.cache-hit != 'true'
-        run: ./tools/get_cia_tools.sh
+        run: bash tools/get_cia_tools.sh
 
       - name: Test the pet simulation (runs on the build machine)
         run: |
