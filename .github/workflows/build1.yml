@@ -1,0 +1,119 @@
+name: Build Gerald 3DSX (Homebrew Only)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gerald-3dsx-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-3dsx:
+    name: Test and build Gerald.3dsx
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: devkitpro/devkitarm:20260610
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out the Gerald project
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Verify 3DS homebrew toolchain
+        run: |
+          set -euo pipefail
+          : "${DEVKITPRO:?Missing DEVKITPRO}"
+          : "${DEVKITARM:?Missing DEVKITARM}"
+          export PATH="$DEVKITARM/bin:$DEVKITPRO/tools/bin:$PATH"
+          printf '%s\n' "$DEVKITARM/bin" "$DEVKITPRO/tools/bin" >> "$GITHUB_PATH"
+          for tool in arm-none-eabi-gcc tex3ds smdhtool 3dsxtool make python3 cc; do
+            command -v "$tool"
+          done
+          arm-none-eabi-gcc --version | head -n 1
+
+      - name: Check game source and assets
+        run: |
+          set -euo pipefail
+          for path in Makefile source/main.c source/gerald.c source/gerald.h \
+            source/progression.c source/progression.h \
+            gfx/sprites.png gfx/sprites.t3s gfx/bg.png gfx/bg.t3s \
+            gfx/ui.png gfx/ui.t3s banner/icon.png \
+            tools/check_assets.py tests/test_gerald.c tests/test_generations.c; do
+            test -s "$path" || { echo "Missing required file: $path" >&2; exit 1; }
+          done
+          python3 tools/check_assets.py
+
+      - name: Run Gerald gameplay tests
+        run: |
+          set -euo pipefail
+          cc -std=gnu11 -O1 -Wall -Wextra -Werror -Isource \
+            tests/test_gerald.c source/gerald.c -o /tmp/test_gerald
+          /tmp/test_gerald 2>&1 | tee pet-tests.log
+          cc -std=gnu11 -O1 -Wall -Wextra -Werror -Isource \
+            tests/test_generations.c source/progression.c source/gerald.c \
+            -o /tmp/test_generations
+          /tmp/test_generations 2>&1 | tee generations-tests.log
+
+      - name: Compile Gerald for Homebrew Launcher (3DSX only)
+        run: |
+          set -euo pipefail
+          make clean
+          make -j2 3dsx 2>&1 | tee compile.log
+
+      - name: Verify and package Gerald.3dsx
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          expected = {
+              'gerald.elf': b'\x7fELF',
+              'gerald.3dsx': b'3DSX',
+              'gerald.smdh': b'SMDH',
+          }
+          for filename, signature in expected.items():
+              payload = Path(filename).read_bytes()
+              if len(payload) <= 256 or not payload.startswith(signature):
+                  raise SystemExit(f'Invalid or empty output: {filename}')
+              print(f'OK: {filename} ({len(payload):,} bytes)')
+          for filename in ('sprites.t3x', 'bg.t3x', 'ui.t3x'):
+              path = Path('romfs/gfx') / filename
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f'Missing compiled texture: {path}')
+              print(f'OK: {path}')
+          PY
+          mkdir -p dist
+          cp gerald.3dsx dist/gerald.3dsx
+          (cd dist && sha256sum gerald.3dsx > SHA256SUMS)
+          ls -lh dist/
+
+      - name: Downloadable Gerald 3DSX
+        uses: actions/upload-artifact@v6
+        with:
+          name: Gerald-Generations-Fusion-3DSX
+          path: |
+            dist/gerald.3dsx
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload logs if the build fails
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: Gerald-3DSX-error-logs
+          path: |
+            compile.log
+            pet-tests.log
+            generations-tests.log
+          if-no-files-found: warn
+          retention-days: 7
