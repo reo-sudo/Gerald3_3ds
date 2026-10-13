@@ -1,0 +1,120 @@
+name: Build Gerald Generations Fusion CIA
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gerald-fusion-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build Nintendo 3DS CIA
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: devkitpro/devkitarm:20260610
+      options: --user 0:0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out Gerald source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up tools and dependency checks
+        run: |
+          set -euo pipefail
+          test -n "${DEVKITPRO:-}"
+          test -n "${DEVKITARM:-}"
+          test -x "$DEVKITARM/bin/arm-none-eabi-gcc"
+          export PATH="$DEVKITARM/bin:$DEVKITPRO/tools/bin:$PWD/bin:$PATH"
+          printf '%s\n' "$DEVKITARM/bin" "$DEVKITPRO/tools/bin" "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+          command -v arm-none-eabi-gcc
+          command -v tex3ds
+          command -v smdhtool
+          command -v 3dsxtool
+          arm-none-eabi-gcc -dumpfullversion
+          apt-get update -qq
+          apt-get install -y --no-install-recommends build-essential curl unzip jq git \
+            cmake pkg-config libpng-dev libjpeg-dev libvorbis-dev libogg-dev \
+            libsndfile1-dev zlib1g-dev libssl-dev python3
+
+      - name: Validate artwork, audio and source
+        run: |
+          set -euo pipefail
+          python3 tools/check_assets.py
+          bash -n tools/get_cia_tools.sh
+          python3 -m py_compile tools/check_assets.py tools/verify_outputs.py tools/extend_gene_art.py
+
+      - name: Run original and Generations simulation tests
+        run: |
+          set -euo pipefail
+          cc -std=gnu11 -O1 -Wall -Wextra -Werror -Isource tests/test_gerald.c source/gerald.c -o /tmp/test_gerald
+          /tmp/test_gerald | tee simulation-test.log
+          cc -std=gnu11 -O1 -Wall -Wextra -Werror -Isource \
+            tests/test_generations.c source/progression.c source/gerald.c -o /tmp/test_generations
+          /tmp/test_generations | tee generation-test.log
+          cc -std=gnu11 -D__3DS__ -Wall -Wextra -Isource -Itests/stubs -fsyntax-only source/main.c
+
+      - name: Install CIA packaging tools
+        run: |
+          set -euo pipefail
+          bash tools/get_cia_tools.sh 2>&1 | tee install-tools.log
+          test -x bin/makerom && test -x bin/bannertool
+
+      - name: Build ARM game and convert sprite textures
+        run: |
+          set -euo pipefail
+          make clean
+          make -j2 3dsx 2>&1 | tee compile.log
+          test -s gerald.elf
+          test -s gerald.3dsx
+          test -s romfs/gfx/sprites.t3x
+          test -s romfs/gfx/bg.t3x
+          test -s romfs/gfx/ui.t3x
+
+      - name: Compile installable CIA with banner and music
+        run: |
+          set -euo pipefail
+          make -j2 cia 2>&1 | tee package.log
+          mkdir -p dist
+          cp gerald.cia gerald.3dsx dist/
+          cp banner/banner.png dist/banner.png
+          cp banner/icon.png dist/icon.png
+          python3 tools/verify_outputs.py
+          (cd dist && sha256sum gerald.cia gerald.3dsx > SHA256SUMS)
+
+      - name: Upload finished CIA and 3DSX
+        uses: actions/upload-artifact@v6
+        with:
+          name: Gerald-Generations-Fusion-3DS
+          path: |
+            dist/gerald.cia
+            dist/gerald.3dsx
+            dist/banner.png
+            dist/icon.png
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload debugging logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: Gerald-Generations-Fusion-build-logs
+          path: |
+            simulation-test.log
+            generation-test.log
+            install-tools.log
+            compile.log
+            package.log
+          if-no-files-found: warn
+          retention-days: 7
