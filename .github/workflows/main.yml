@@ -8,38 +8,63 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write        # lets tagged builds attach the files to a GitHub release
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     container: devkitpro/devkitarm:latest
-    env:
-      GH_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system packages
+      - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends curl ca-certificates unzip jq make git build-essential
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl unzip jq git make cmake build-essential \
+            libpng-dev libvorbis-dev zlib1g-dev
 
-      - name: Install 3DS libraries (libctru, citro2d, citro3d, tex3ds, smdhtool, 3dsxtool)
+      - name: Install 3DS libraries
         run: dkp-pacman -Sy --noconfirm --needed 3ds-dev
 
-      - name: Cache makerom + bannertool
+      - name: Cache CIA tools
         id: tools-cache
         uses: actions/cache@v4
         with:
           path: bin
-          key: cia-tools-v1
+          key: cia-tools-v2-${{ runner.os }}
 
-      - name: Get makerom + bannertool
+      - name: Install makerom and bannertool
         if: steps.tools-cache.outputs.cache-hit != 'true'
-        run: bash tools/get_cia_tools.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin work
 
-      - name: Test the pet simulation (runs on the build machine)
+          # Project_CTR's release asset is stable and avoids relying on the
+          # old release-discovery logic in tools/get_cia_tools.sh.
+          curl --fail --show-error --location \
+            --retry 5 --retry-delay 2 \
+            -o work/makerom.zip \
+            https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.19.0/makerom-v0.19.0-ubuntu_x86_64.zip
+          unzip -qo work/makerom.zip -d work/makerom
+          install -m 0755 "$(find work/makerom -type f -name makerom -print -quit)" bin/makerom
+
+          # Steveice10/bannertool is no longer available at its old release URL.
+          # Build the maintained source mirror instead of cloning the deleted repo.
+          git clone --depth 1 https://github.com/diasurgical/bannertool.git work/bannertool
+          cmake -S work/bannertool -B work/bannertool/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build work/bannertool/build --parallel "$(nproc)"
+          install -m 0755 "$(find work/bannertool/build -type f -name bannertool -print -quit)" bin/bannertool
+
+          test -x bin/makerom
+          test -x bin/bannertool
+          bin/makerom --help >/dev/null
+          bin/bannertool --help >/dev/null || true
+          ls -l bin
+
+      - name: Test the pet simulation
         run: |
           cc -Wall -Wextra -O1 -Isource tools/test_gerald.c source/gerald.c -o /tmp/test_gerald
           /tmp/test_gerald
@@ -59,7 +84,7 @@ jobs:
             gerald.3dsx
           if-no-files-found: error
 
-      - name: Attach to release (tags like v1.0)
+      - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
