@@ -1,8 +1,8 @@
 # Gerald -- Nintendo 3DS build (devkitARM + libctru + citro2d/citro3d)
 #
-#   make          builds gerald.3dsx and gerald.cia
+#   make          builds gerald.3dsx (what GitHub Actions does)
 #   make 3dsx     just the Homebrew Launcher version
-#   make cia      just the installable CIA (needs makerom + bannertool, see tools/get_cia_tools.sh)
+#   make cia      OPTIONAL installable CIA (needs makerom + bannertool; not part of `make` / CI)
 #   make clean
 #
 # Tools used: arm-none-eabi-gcc, tex3ds, smdhtool, 3dsxtool (all part of devkitPro's 3ds-dev)
@@ -32,7 +32,7 @@ T3X     := romfs/gfx/sprites.t3x romfs/gfx/bg.t3x romfs/gfx/ui.t3x
 SOUNDS  := $(wildcard romfs/snd/*.raw)
 
 .PHONY: all 3dsx cia clean
-all: 3dsx cia
+all: 3dsx
 3dsx: $(TARGET).3dsx
 cia: $(TARGET).cia
 
