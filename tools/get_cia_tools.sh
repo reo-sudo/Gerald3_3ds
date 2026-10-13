@@ -45,7 +45,8 @@ if [ ! -x bin/bannertool ]; then
   || {
     echo "== bannertool: building from source"
     rm -rf work/bannertool
-    git clone --recursive --depth 1 https://github.com/Steveice10/bannertool work/bannertool \
+    git clone --depth 1 https://github.com/Mtgxyz/bannertool work/bannertool \
+      && git clone --depth 1 https://github.com/Steveice10/buildtools work/bannertool/buildtools \
       && make -C work/bannertool -j"$(nproc)" \
       && cp "$(find work/bannertool/output -type f -name bannertool | head -n1)" bin/bannertool
   }
